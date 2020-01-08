@@ -947,7 +947,6 @@ class TotalTrainer(UnsupervisedTrainer):
     def __init__(
         self,
         model,
-        discriminator,
         dataset,
         train_size=0.90,
         test_size=0.10,
@@ -957,6 +956,7 @@ class TotalTrainer(UnsupervisedTrainer):
         n_iter_kl_warmup=7500,
         n_iter_back_kl_warmup=7500,
         early_stopping_kwargs=default_early_stopping_kwargs,
+        discriminator=None,
         imputation_mode=False,
         kappa=1.0,
         **kwargs,
@@ -965,7 +965,6 @@ class TotalTrainer(UnsupervisedTrainer):
         self.n_proteins = model.n_input_proteins
         self.imputation_mode = imputation_mode
         self.kappa = kappa
-
         self.pro_recons_weight = pro_recons_weight
         self.n_epochs_back_kl_warmup = n_epochs_back_kl_warmup
         self.n_iter_back_kl_warmup = n_iter_back_kl_warmup
@@ -978,8 +977,11 @@ class TotalTrainer(UnsupervisedTrainer):
             **kwargs,
         )
 
+        if imputation_mode is True and discriminator is None:
+            raise ValueError("Discriminator should be a scvi.models.Classifier object")
+
         self.discriminator = discriminator
-        if self.use_cuda:
+        if self.use_cuda and self.discriminator is not None:
             self.discriminator.cuda()
 
         if type(self) is TotalTrainer:
