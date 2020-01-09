@@ -1153,6 +1153,7 @@ class TotalTrainer(UnsupervisedTrainer):
                     continue
 
                 if self.imputation_mode:
+                    self.discriminator.train()
                     batch_index = tensors_list[0][3]
                     z = self._get_z(*tensors_list)
                     # Train discriminator
@@ -1161,6 +1162,7 @@ class TotalTrainer(UnsupervisedTrainer):
                     d_optimizer.zero_grad()
                     d_loss.backward()
                     d_optimizer.step()
+                    self.discriminator.eval()
 
                     # Train generative model to fool discriminator
                     fool_loss = self.loss_discriminator(z, batch_index, False)
