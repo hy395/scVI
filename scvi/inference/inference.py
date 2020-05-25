@@ -1,6 +1,7 @@
 import logging
 import copy
 from typing import Union
+from typing import List
 
 import matplotlib.pyplot as plt
 import torch
@@ -99,6 +100,20 @@ class UnsupervisedTrainer(Trainer):
             self.validation_set.to_monitor = ["elbo"]
             self.n_samples = len(self.train_set.indices)
 
+            
+    # HY: function to use self-defined train test split
+    def use_train_test_validation_split(self, indices_train, indices_test):
+        (
+            self.train_set,
+            self.test_set,
+            self.validation_set,
+        ) = self.train_test_validation_mcv(self.model, self.gene_dataset, indices_train, indices_test)
+        self.train_set.to_monitor = ["elbo"]
+        self.test_set.to_monitor = ["elbo"]
+        self.validation_set.to_monitor = ["elbo"]
+        self.n_samples = len(self.train_set.indices)
+        
+    
     @property
     def posteriors_loop(self):
         return ["train_set"]

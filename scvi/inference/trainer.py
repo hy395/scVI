@@ -111,6 +111,14 @@ class Trainer:
             self.metrics_to_monitor.add(self.early_stopping.early_stopping_metric)
 
         self.show_progbar = show_progbar
+        
+        # additional variables
+        self.best_latent_elbo_test = None
+        self.best_denoise_elbo_test = None
+        self.best_latent_mcv_train = None
+        self.best_denoise_mcv_train = None
+        self.best_latent_groundtruth_train = None
+        self.best_denoise_groundtruth_train = None
 
     @torch.no_grad()
     def compute_metrics(self):
@@ -139,6 +147,62 @@ class Trainer:
                     for metric in self.metrics_to_monitor:
                         result = getattr(posterior, metric)()
                         self.history[metric + "_" + name] += [result]
+                    
+                if self.gene_dataset.mcv:
+                    umi_train = self.gene_dataset.n_counts # how many total umi in each cell (train umi)?
+                    groundtruth = np.array([x*y for x,y in zip(self.gene_dataset.groundtruth, umi_train)]) # groundtruth
+
+                    # denoise counts:
+                    full_posterior = self.create_posterior(self.model, self.gene_dataset, indices=np.arange(len(self.gene_dataset)))
+                    latent, _, _ = full_posterior.sequential().get_latent()
+                    denoised_scale = full_posterior.sequential().get_sample_scale()
+                    for i in range(9):
+                        denoised_scale = denoised_scale + full_posterior.sequential().get_sample_scale()
+                    denoised_scale = denoised_scale/10
+                    
+                    # groundtruth loss:
+                    denoised_scale_1 = np.array([x*y for x,y in zip(denoised_scale, umi_train)])                
+                    self.history['groundtruth_train_cell'] += [np.mean((groundtruth[self.train_set.indices] - 
+                                                                        denoised_scale_1[self.train_set.indices])**2)]
+                    self.history['groundtruth_test_cell'] += [np.mean((groundtruth[self.test_set.indices] - 
+                                                                       denoised_scale_1[self.test_set.indices])**2)]
+
+                    # reconstruction loss (by MSE):
+                    self.history['reconstruction_train_cell'] += [np.mean((self.gene_dataset.train_umi[self.train_set.indices] - 
+                                                                        denoised_scale_1[self.train_set.indices])**2)]
+                    self.history['reconstruction_test_cell'] += [np.mean((self.gene_dataset.train_umi[self.test_set.indices] - 
+                                                                       denoised_scale_1[self.test_set.indices])**2)]
+                    
+                    # mcv loss:
+                    umi_test = self.gene_dataset.test_umi.sum(axis=1)
+                    denoised_scale_2 = np.array([x*y for x,y in zip(denoised_scale, umi_test)])
+                    self.history['mcv_train_cell'] += [np.mean((self.gene_dataset.test_umi[self.train_set.indices] - 
+                                                              denoised_scale_2[self.train_set.indices])**2)]
+                    self.history['mcv_test_cell'] += [np.mean((self.gene_dataset.test_umi[self.test_set.indices] - 
+                                                             denoised_scale_2[self.test_set.indices])**2)]
+                    
+                    # save the models
+                    if (len(self.history['groundtruth_train_cell'])==1
+                       ) or (self.history['groundtruth_train_cell'][-1] < np.min(self.history['groundtruth_train_cell'][:-1])
+                            ):
+                        print('denoised matrix based on groundtruth updated at epoch %d'%epoch)
+                        self.best_latent_groundtruth_train = latent
+                        self.best_denoise_groundtruth_train = denoised_scale
+
+                    if (len(self.history['mcv_train_cell'])==1
+                       ) or (self.history['mcv_train_cell'][-1] < np.min(self.history['mcv_train_cell'][:-1])
+                            ):
+                        print('denoised matrix based on mcv updated at epoch %d'%epoch)
+                        self.best_latent_mcv_train = latent
+                        self.best_denoise_mcv_train = denoised_scale
+                        
+                    if (len(self.history['elbo_test_set'])==1
+                       ) or (self.history['elbo_test_set'][-1] < np.min(self.history['elbo_test_set'][:-1])
+                            ):
+                        print('denoised matrix based on elbo updated at epoch %d'%epoch)
+                        self.best_latent_elbo_test = latent
+                        self.best_denoise_elbo_test = denoised_scale
+                        
                 self.model.train()
         self.compute_metrics_time += time.time() - begin
 
@@ -378,7 +442,45 @@ class Trainer:
                 model, gene_dataset, indices=indices_validation, type_class=type_class
             ),
         )
+    
+    # HY: new function to deal with MCV
+    def train_test_validation_mcv(
+        self,
+        model=None,
+        gene_dataset=None,
+        indices_train=None,
+        indices_test=None,
+        type_class=Posterior,
+    ):
+        """Creates posteriors ``train_set``, ``test_set``, ``validation_set``.
 
+        If ``train_size + test_size < 1`` then ``validation_set`` is non-empty.
+
+        :param train_size: float, int, or None (default is 0.1)
+        :param test_size: float, int, or None (default is None)
+        """
+        model = self.model if model is None and hasattr(self, "model") else model
+        gene_dataset = (
+            self.gene_dataset
+            if gene_dataset is None and hasattr(self, "model")
+            else gene_dataset
+        )
+        n = len(gene_dataset)
+        print(n)
+        indices_validation = np.arange(n)[~np.isin(np.arange(n), np.concatenate((indices_train, indices_test)))]
+
+        return (
+            self.create_posterior(
+                model, gene_dataset, indices=indices_train, type_class=type_class
+            ),
+            self.create_posterior(
+                model, gene_dataset, indices=indices_test, type_class=type_class
+            ),
+            self.create_posterior(
+                model, gene_dataset, indices=indices_validation, type_class=type_class
+            ),
+        )
+    
     def create_posterior(
         self,
         model=None,
